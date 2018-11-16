@@ -48,14 +48,13 @@ class DomainManager
 
   def search_for_domain(input)
     uri = URI.parse("https://api.dnsimple.com/v1/domains/#{input}/check")
-    request = set_token_request(uri)
+    request = get_request(uri)
     req_options = set_req_options(uri)
     response = create_request(uri, req_options, request)
   end
 
   def begin_registration(domain_name)
-    accounts = list_accounts
-    contacts = JSON.parse(accounts.body)
+    contacts = JSON.parse(list_accounts.body)
     if !contacts["data"].nil?
       contact_id = get_contact_id(contacts)
     else
@@ -78,7 +77,7 @@ class DomainManager
 
   def register_domain(domain_name, contact_id)
     uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/registrar/domains/#{domain_name}/registrations")
-    request = set_bearer_request(uri)
+    request = post_request(uri)
     request.body = { registrant_id: contact_id, whois_privacy: true }.to_json
     req_options = set_req_options(uri)
     response = create_request(uri, req_options, request)
@@ -86,19 +85,19 @@ class DomainManager
 
   def list_accounts
     uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/contacts")
-    request = set_bearer_request(uri)
+    request = post_request(uri)
     req_options = set_req_options(uri)
     response = create_request(uri, req_options, request)
     # response.body
   end
 
-  def set_token_request(uri)
+  def get_request(uri)
     request = Net::HTTP::Get.new(uri)
     request["X-Dnsimple-Token"] = "#{self.user_email}:#{self.v1_token}"
     request["Accept"] = "application/json"
   end
 
-  def set_bearer_request(uri)
+  def post_request(uri)
     request = Net::HTTP::Post.new(uri)
     request.content_type = "application/json"
     request["Authorization"] = "Bearer #{self.user_token}"
@@ -124,7 +123,7 @@ class DomainManager
 
   def create_account_contact
     uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/contacts")
-    request = set_bearer_request(uri)
+    request = post_request(uri)
     request.body = {
       first_name: 'First Name',
       last_name: 'Last Name',
