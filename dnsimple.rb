@@ -2,156 +2,149 @@ require 'net/http'
 require 'uri'
 require 'json'
 
-# user_token  = ENV['user_token']
-# user_email = ENV['user_email']
-# account_token = ENV['account_token']
-# sandbox_token = ENV['sandbox_token']
-# v1_token = ENV['v1_token']
-# account_id = ENV['account_id']
+class DomainManager
 
-class DomainChecker
-  attr_accessor :v1_token, :user_email, :user_token, :account_id
-
-  def initialize(v1_token, user_token, user_email, account_id)
-    @v1_token = v1_token
-    @user_token = user_token
-    @user_email = user_email
-    @account_id = account_id
+  def initialize
+    self.v1_token = ENV['v1_token']
+    self.user_token = ENV['user_token']
+    self.user_email = ENV['user_email']
+    self.account_id = ENV['account_id']
   end
 	
   def ask_user 
     puts 'enter a domain you want to look up:'
     input = gets.chomp
     puts 'checking...'
-    self.domain_lookup(input)
+    domain_lookup(input)
   end
 
   def domain_lookup(input)
-    uri = URI.parse("https://api.dnsimple.com/v1/domains/#{input}/check")
+    search = search_for_domain(input)
+    parsed_response = JSON.parse(search.body)
+    answer = handle_user_options(input, parsed_response)
+    handle_user_selection(answer)
+  end
 
-    request = Net::HTTP::Get.new(uri)
-    request["X-Dnsimple-Token"] = "#{@user_email}:#{@v1_token}"
-    request["Accept"] = "application/json"
-
-    req_options = {
-      use_ssl: uri.scheme == "https",
-    }
-
-    response = Net::HTTP.start(uri.hostname, uri.port, req_options) { |http| http.request(request) }
-
-    parsed_response = JSON.parse(response.body)
-		
-    if parsed_response['available']
-      puts ' '
-      p 'domain status: AVAILABLE'
-      puts ' '
-    else 
-      puts ' '
-      p 'domain status: NOT AVAILABLE'
-      puts ' '
-    end
-		
-    puts 'what would you like to do?'
-    puts '1) enter "buy" to buy ' + input + ' for ' + parsed_response['currency_symbol'] + parsed_response['price']
-    puts '2) enter "search" to search for another domain'
-    puts '3) enter "exit" to leave'
-		
+  def handle_user_options(input, parsed_response)
+    parsed_response['available'] ? puts "domain status: AVAILABLE" : puts "domain status: NOT AVAILABLE"
+    puts "what would you like to do?"
+    puts "1) type 'buy' to buy #{input} for #{parsed_response['currency_symbol']} #{parsed_response['price']}"
+    puts "2) type 'search' to search for another domain"
+    puts "3) type 'exit' to leave"
     answer = gets.chomp.strip
+  end
+
+  def handle_user_selection(answer)
     case answer
     when 'buy'
-      self.register_domain(input)
+      begin_registration(input)
     when 'search'
-      self.ask_user
+      ask_user
     else 
-      p 'okay bye!'
+      puts 'okay bye!'
+      exit
     end
   end
 
-  def register_domain(domain_name)
-    list_contacts = self.list_accounts
-    contacts = JSON.parse(list_contacts.body)
+  def search_for_domain(input)
+    uri = URI.parse("https://api.dnsimple.com/v1/domains/#{input}/check")
+    request = set_token_request(uri)
+    req_options = set_req_options(uri)
+    response = create_request(uri, req_options, request)
+  end
+
+  def begin_registration(domain_name)
+    accounts = list_accounts
+    contacts = JSON.parse(accounts.body)
     if !contacts["data"].nil?
-      puts 'select the contact you would like to use to register this domain'
-      contacts["data"].each do |c|
-        puts "-Please enter '" + c["id"].to_s + "' to choose " + c["first_name"] + " " + c["last_name"] + ' as the primary contact for this domain'
-      end
-      contact_id = gets.chomp.strip
+      contact_id = get_contact_id(contacts)
     else
-      puts 'no contacts created. Would you like to create one?'
-      answer = gets.chomp.strip 
-      if answer == 'yes'
-        self.create_account_contact
-        self.register_domain(domain_name)
-      else
-        return
-      end
+      ask_to_create_contact(domain_name)
     end
 
-    if !contact_id
-      return
-    end
+    return unless !contact_id.nil?
     
-    uri = URI.parse("https://api.dnsimple.com/v2/#{@account_id}/registrar/domains/#{domain_name}/registrations")
-		
-    request = Net::HTTP::Post.new(uri)
-    request.content_type = "application/json"
-    request["Authorization"] = "Bearer #{@user_token}"
-    request["Accept"] = "application/json"
-    request.body = {
-      registrant_id: contact_id,
-      whois_privacy: true
-    }.to_json
+    domain = register_domain(domain_name, contact_id)
+    # domain.body
+  end
 
-    req_options = {
-      use_ssl: uri.scheme == "https",
-    }
-    response = Net::HTTP.start(uri.hostname, uri.port, req_options) { |http| http.request(request) }
-    # response.body
+  def get_contact_id(contacts)
+    puts 'select the contact you would like to use to register this domain'
+    contacts["data"].each do |c|
+      puts "-Please enter '" + c["id"].to_s + "' to choose " + c["first_name"] + " " + c["last_name"] + ' as the primary contact for this domain'
+    end
+    contact_id = gets.chomp.strip
+  end
+
+  def register_domain(domain_name, contact_id)
+    uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/registrar/domains/#{domain_name}/registrations")
+    request = set_bearer_request(uri)
+    request.body = { registrant_id: contact_id, whois_privacy: true }.to_json
+    req_options = set_req_options(uri)
+    response = create_request(uri, req_options, request)
   end
 
   def list_accounts
-    uri = URI.parse("https://api.dnsimple.com/v2/#{@account_id}/contacts")
-    request = Net::HTTP::Get.new(uri)
-    request["Authorization"] = "Bearer #{@user_token}"
-    request["Accept"] = "application/json"
-
-    req_options = {
-      use_ssl: uri.scheme == "https",
-    }
-    response = Net::HTTP.start(uri.hostname, uri.port, req_options) { |http|  http.request(request) }
+    uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/contacts")
+    request = set_bearer_request(uri)
+    req_options = set_req_options(uri)
+    response = create_request(uri, req_options, request)
     # response.body
   end
 
-  def create_account_contact
-    uri = URI.parse("https://api.dnsimple.com/v2/#{@account_id}/contacts")
+  def set_token_request(uri)
+    request = Net::HTTP::Get.new(uri)
+    request["X-Dnsimple-Token"] = "#{self.user_email}:#{self.v1_token}"
+    request["Accept"] = "application/json"
+  end
+
+  def set_bearer_request(uri)
     request = Net::HTTP::Post.new(uri)
     request.content_type = "application/json"
-    request["Authorization"] = "Bearer #{@user_token}"
+    request["Authorization"] = "Bearer #{self.user_token}"
     request["Accept"] = "application/json"
+  end
+
+  def set_req_options(uri)
+    req_options = {
+      use_ssl: uri.scheme == "https",
+    }
+  end
+
+  def ask_to_create_contact(domain_name)
+    puts 'No contacts exist yet for your account. Would you like to create one? Type "yes" to create a new contact.'
+    answer = gets.chomp.strip 
+    if answer == 'yes'
+      create_account_contact
+      begin_registration(domain_name)
+    else
+      return
+    end    
+  end
+
+  def create_account_contact
+    uri = URI.parse("https://api.dnsimple.com/v2/#{self.account_id}/contacts")
+    request = set_bearer_request(uri)
     request.body = {
-      first_name: 'Mcfirstname',
-      last_name: 'Mclastname',
+      first_name: 'First Name',
+      last_name: 'Last Name',
       address1: '1 Broadway',
       city: 'New York',
       state_province: 'NY',
-      postal_code: '10019',
+      postal_code: '10000',
       country: 'USA',
       email: 'hello@example.com',
       phone: '+15555555555',
       fax: '+15555555555'
     }.to_json
+    req_options = set_req_options(uri)
+    response = create_request(uri, req_options, request)
+  end
 
-    req_options = {
-      use_ssl: uri.scheme == "https",
-    }
-
-    response = Net::HTTP.start(uri.hostname, uri.port, req_options) do |http|
-      http.request(request)
-    end
+  def create_request(uri, req_options, request)
+    Net::HTTP.start(uri.hostname, uri.port, req_options) { |http| http.request(request) }
   end
 end
 
-
-dnsimple = DomainChecker.new(v1_token, account_token, user_email, account_id)
-
-dnsimple.ask_user
+# domain_manager = DomainManager.new
+# domain_manager.ask_user
